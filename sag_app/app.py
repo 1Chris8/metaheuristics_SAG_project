@@ -438,18 +438,25 @@ with tab_calendario_flujo:
         unsafe_allow_html=True,
     )
 
-    c_vista1, c_vista2 = st.columns([3, 1])
+    c_vista1, c_vista2 = st.columns([3, 2])
     with c_vista1:
         vista_rango = st.radio(
             "Seleccionar periodo del calendario:",
             [
-                "Horizonte Completo (Semanas 1 a 156 · 3 Años)",
                 "Año 1 (Semanas 1 a 52)",
                 "Año 2 (Semanas 53 a 104)",
                 "Año 3 (Semanas 105 a 156)",
+                "Horizonte Completo (Semanas 1 a 156 · 3 Años)",
             ],
             horizontal=True,
             key="selector_rango_calendario",
+        )
+    with c_vista2:
+        modo_etiqueta = st.radio(
+            "Número visible en celdas de servicio:",
+            ["Número de Semana", "Edad del Revestimiento"],
+            horizontal=True,
+            key="selector_etiqueta_celda",
         )
 
     if vista_rango == "Año 1 (Semanas 1 a 52)":
@@ -464,40 +471,49 @@ with tab_calendario_flujo:
     semanas_seleccionadas = list(range(sem_inicio, sem_fin + 1))
     n_sems = len(semanas_seleccionadas)
 
-    # Construcción de la matriz visual (Heatmap Plotly)
-    # Filas: Sección 9 down to Sección 1, y arriba la fila del Molino SAG
     nombres_filas = [f"Sección {i}" for i in range(9, 0, -1)] + ["Molino SAG (Paradas E)"]
     z_matrix = []
-    text_matrix = []
     hover_matrix = []
+    annotations_list = []
 
     # 1. Fila de Molino SAG
     z_molino = []
-    t_molino = []
     h_molino = []
     for s in semanas_seleccionadas:
         idx = s - 1
         m = molino_estado[idx]
         if m["es_E"]:
-            z_molino.append(3)  # Código para parada de planta
-            t_molino.append(f"{m['W_k']:.0f}h" if n_sems <= 52 else "")
+            z_molino.append(2)  # Parada de planta (Rojo)
             h_molino.append(f"Semana {s}<br>Componente: Molino SAG<br>Estado: DETENCIÓN PROGRAMADA (E)<br>Duración: {m['W_k']:.1f} horas<br>Disponibilidad: {m['disp_pct']:.1f}%")
+            annotations_list.append(dict(
+                x=s,
+                y="Molino SAG (Paradas E)",
+                text=f"{m['W_k']:.0f}h",
+                showarrow=False,
+                font=dict(color="#ffffff", size=10, family="ui-monospace, monospace"),
+            ))
         else:
-            z_molino.append(0)  # Operación continua
-            t_molino.append("")
+            z_molino.append(0)  # Operación normal (Gris normalizado)
             h_molino.append(f"Semana {s}<br>Componente: Molino SAG<br>Estado: Operación Continua (168 h disponibles)")
+            if n_sems <= 52:
+                annotations_list.append(dict(
+                    x=s,
+                    y="Molino SAG (Paradas E)",
+                    text=str(s),
+                    showarrow=False,
+                    font=dict(color="#475569", size=9, family="ui-monospace, monospace"),
+                ))
 
     # 2. Filas de Secciones 9 a 1
     filas_secciones_z = []
-    filas_secciones_t = []
     filas_secciones_h = []
 
     for i in range(9, 0, -1):
         z_s = []
-        t_s = []
         h_s = []
         L_i = float(st.session_state.params["secciones"][i]["L_i"])
         CS_i = float(st.session_state.params["secciones"][i]["CS_i"])
+        nombre_secc = f"Sección {i}"
 
         for s in semanas_seleccionadas:
             idx = s - 1
@@ -506,9 +522,14 @@ with tab_calendario_flujo:
             es_E = molino_estado[idx]["es_E"]
             w_k = molino_estado[idx]["W_k"]
 
+            # Texto numérico a mostrar en la celda
+            if modo_etiqueta == "Número de Semana":
+                numero_mostrar = str(s)
+            else:
+                numero_mostrar = f"{edad_act:.0f}"
+
             if es_reemp:
-                z_s.append(4)  # Código para REEMPLAZO (Azul sólido)
-                t_s.append("R")
+                z_s.append(3)  # REEMPLAZO (Azul)
                 h_s.append(
                     f"Semana {s} (Año {(s-1)//52+1}, Mes {(s-1)//4+1})<br>"
                     f"Componente: <b>Sección {i}</b><br>"
@@ -517,49 +538,65 @@ with tab_calendario_flujo:
                     f"Costo recambio: ${CS_i:,.0f}<br>"
                     f"Parada de planta: {w_k:.0f} horas"
                 )
+                annotations_list.append(dict(
+                    x=s,
+                    y=nombre_secc,
+                    text="R",
+                    showarrow=False,
+                    font=dict(color="#ffffff", size=11, family="ui-monospace, monospace"),
+                ))
             elif es_E:
-                z_s.append(2)  # Parada de planta sin reemplazo de esta sección
-                t_s.append(f"{edad_act:.0f}" if n_sems <= 52 else "")
+                z_s.append(1)  # Parada de planta sin reemplazo (Ámbar suave)
                 h_s.append(
                     f"Semana {s}<br>"
                     f"Componente: Sección {i}<br>"
                     f"Estado: Parada de planta (no requiere reemplazo)<br>"
                     f"Edad acumulada: {edad_act:.0f} / {L_i:.0f} semanas ({edad_act/L_i*100:.1f}%)"
                 )
+                if n_sems <= 52:
+                    annotations_list.append(dict(
+                        x=s,
+                        y=nombre_secc,
+                        text=numero_mostrar,
+                        showarrow=False,
+                        font=dict(color="#78350f", size=9, family="ui-monospace, monospace"),
+                    ))
             else:
-                # Operación normal: valor proporcional al desgaste
-                val_desgaste = min(0.95, (edad_act / max(1.0, L_i)) * 0.95)
-                z_s.append(val_desgaste)
-                t_s.append(f"{edad_act:.0f}" if n_sems <= 52 else "")
+                z_s.append(0)  # Operación normal (Gris normalizado uniforme)
                 h_s.append(
                     f"Semana {s}<br>"
                     f"Componente: Sección {i}<br>"
                     f"Estado: Operación en servicio<br>"
                     f"Edad acumulada: {edad_act:.0f} / {L_i:.0f} semanas ({edad_act/L_i*100:.1f}%)"
                 )
+                if n_sems <= 52:
+                    annotations_list.append(dict(
+                        x=s,
+                        y=nombre_secc,
+                        text=numero_mostrar,
+                        showarrow=False,
+                        font=dict(color="#0f172a", size=9, family="ui-monospace, monospace"),
+                    ))
 
         filas_secciones_z.append(z_s)
-        filas_secciones_t.append(t_s)
         filas_secciones_h.append(h_s)
 
     z_matrix = filas_secciones_z + [z_molino]
-    text_matrix = filas_secciones_t + [t_molino]
     hover_matrix = filas_secciones_h + [h_molino]
 
-    # Paleta técnica de colores:
-    # 0.0 - 0.95: Escala de desgaste en servicio (verde muy tenue a verde grisáceo)
-    # 2.0: Detención sin recambio (#fed7aa - ámbar muy suave)
-    # 3.0: Parada de Molino (#b91c1c - rojo técnico)
-    # 4.0: Reemplazo programado (#1d4ed8 - azul técnico)
+    # Paleta normalizada discreta:
+    # 0 = Gris normalizado uniforme (#e2e8f0) para operación en servicio
+    # 1 = Ámbar suave (#fed7aa) para parada sin recambio de sección
+    # 2 = Rojo (#b91c1c) para parada del Molino SAG
+    # 3 = Azul (#1d4ed8) para reemplazo programado R
     colorscale = [
-        [0.00, "#f8fafc"],
-        [0.20, "#e2e8f0"],
-        [0.24, "#cbd5e1"],
-        [0.49, "#ffedd5"],  # 2.0 / 4.0
-        [0.51, "#fed7aa"],
-        [0.74, "#ef4444"],  # 3.0 / 4.0
-        [0.76, "#b91c1c"],
-        [0.99, "#2563eb"],  # 4.0 / 4.0
+        [0.00, "#e2e8f0"],
+        [0.25, "#e2e8f0"],
+        [0.26, "#fed7aa"],
+        [0.50, "#fed7aa"],
+        [0.51, "#b91c1c"],
+        [0.75, "#b91c1c"],
+        [0.76, "#1d4ed8"],
         [1.00, "#1d4ed8"],
     ]
 
@@ -568,16 +605,13 @@ with tab_calendario_flujo:
             z=z_matrix,
             x=semanas_seleccionadas,
             y=nombres_filas,
-            text=text_matrix,
-            texttemplate="%{text}",
-            textfont=dict(color="#ffffff", size=10, family="ui-monospace, monospace"),
             hovertext=hover_matrix,
             hoverinfo="text",
             colorscale=colorscale,
             zmin=0.0,
-            zmax=4.0,
+            zmax=3.0,
             showscale=False,
-            xgap=1,
+            xgap=1.5,
             ygap=2,
         )
     )
@@ -588,14 +622,15 @@ with tab_calendario_flujo:
 
     fig_matriz.update_layout(
         template="plotly_white",
-        height=380,
+        height=390,
+        annotations=annotations_list,
         font=dict(family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", size=11),
         xaxis=dict(
             title="Semana del Calendario",
             range=[sem_inicio - 0.5, sem_fin + 0.5],
             tickmode="linear",
             tick0=sem_inicio,
-            dtick=4 if n_sems <= 52 else 12,
+            dtick=1 if n_sems <= 26 else (2 if n_sems <= 52 else 12),
         ),
         yaxis=dict(title="", tickfont=dict(size=12, color="#0f172a")),
         margin=dict(t=20, b=35, l=150, r=20),
@@ -608,19 +643,19 @@ with tab_calendario_flujo:
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px 16px; margin-bottom: 16px; display: flex; gap: 28px; flex-wrap: wrap; font-size: 12px; color: #334155;">
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #1d4ed8; color: #fff; text-align: center; font-weight: bold; line-height: 18px; border-radius: 2px;">R</span>
-            <span><strong>R (Azul):</strong> Semana de Reemplazo efectivo de la sección en detención programada.</span>
+            <span><strong>R (Azul):</strong> Semana de Reemplazo de sección en detención programada.</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="display: inline-block; width: 18px; height: 18px; background-color: #b91c1c; border-radius: 2px;"></span>
-            <span><strong>Rojo:</strong> Semana con Parada de Molino (Clase E, duración W_k horas).</span>
+            <span style="display: inline-block; width: 18px; height: 18px; background-color: #b91c1c; color: #fff; text-align: center; font-size: 10px; font-weight: bold; line-height: 18px; border-radius: 2px;">48h</span>
+            <span><strong>Rojo:</strong> Semana con Parada de Molino SAG (duración W_k horas).</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #fed7aa; border-radius: 2px;"></span>
-            <span><strong>Ámbar:</strong> Parada de planta donde la sección continúa operando sin ser reemplazada.</span>
+            <span><strong>Ámbar:</strong> Parada de planta donde la sección continúa en servicio sin recambio.</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="display: inline-block; width: 18px; height: 18px; background-color: #e2e8f0; border-radius: 2px;"></span>
-            <span><strong>Gris / Números:</strong> Edad acumulada en semanas de servicio normal continuo.</span>
+            <span style="display: inline-block; width: 18px; height: 18px; background-color: #e2e8f0; color: #0f172a; text-align: center; font-size: 11px; font-weight: bold; line-height: 18px; border-radius: 2px;">1</span>
+            <span><strong>Gris normalizado:</strong> Semana de servicio normal continuo con el número de semana claramente visible.</span>
           </div>
         </div>
         """,
