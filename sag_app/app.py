@@ -20,20 +20,37 @@ import streamlit as st
 from generar_arcos import generar_arcos_seccion
 
 # ---------------------------------------------------------------------------
-# Constantes del modelo (Sección 1.1)
+# Constantes y Nomenclatura Oficial del Modelo (Formulación v7, Cuadro 1)
 # ---------------------------------------------------------------------------
-H = 156  # horizonte de planificación (semanas, 3 años de 52 semanas)
-SECCIONES = list(range(1, 10))  # N = {1, ..., 9}
+H = 156  # Horizonte de planificación (semanas, 3 años de 52 semanas, T = {1, ..., H})
+SECCIONES = list(range(1, 10))  # Conjunto de secciones de revestimiento N = {1, ..., 9}
+
+# Nomenclatura técnica oficial de los componentes de revestimiento
+NOMBRES_SECCIONES = {
+    1: "Levantadores Tapa Alimentación",
+    2: "Placas Tapa Alimentación",
+    3: "Levantadores Cilindro Fila 1",
+    4: "Placas Cilindro Fila 1",
+    5: "Levantadores Cilindro Fila 2",
+    6: "Placas Cilindro Fila 2",
+    7: "Parrillas de Descarga",
+    8: "Levantadores de Pulpa",
+    9: "Anillos y Cono Central",
+}
+
+ETIQUETA_SECCIONES = {
+    i: f"S{i} — {NOMBRES_SECCIONES[i]}" for i in SECCIONES
+}
 
 COLUMNAS_SECCION = ["e_i", "L_i", "R_i", "beta_i", "eta_i", "CS_i", "tau_i"]
 AYUDA_COLUMNAS = {
-    "e_i": "Edad acumulada al inicio del horizonte (semanas).",
+    "e_i": "Edad acumulada al inicio del horizonte en t=0 (semanas).",
     "L_i": "Vida nominal de diseño del revestimiento (semanas).",
-    "R_i": "Sobreuso máximo admisible sobre L_i (semanas).",
-    "beta_i": "Parámetro de forma de la distribución Weibull.",
-    "eta_i": "Parámetro de escala de la distribución Weibull (semanas).",
-    "CS_i": "Costo directo de adquisición y montaje del revestimiento ($).",
-    "tau_i": "Tiempo marginal requerido de intervención (horas).",
+    "R_i": "Sobreuso máximo admisible sobre L_i (semanas). Cota: Δ_ij ≤ L_i + R_i.",
+    "beta_i": "Parámetro de forma de la distribución Weibull (adimensional).",
+    "eta_i": "Parámetro de escala de la distribución Weibull (vida característica, semanas).",
+    "CS_i": "Costo directo de adquisición y montaje del revestimiento ($ USD).",
+    "tau_i": "Tiempo marginal requerido de intervención para montaje (horas).",
 }
 
 st.set_page_config(
@@ -162,14 +179,22 @@ if "params" not in st.session_state:
 # Conversiones de datos
 # ---------------------------------------------------------------------------
 def secciones_a_df(secciones: dict) -> pd.DataFrame:
-    filas = [{"Sección": i, **secciones[i]} for i in SECCIONES]
+    filas = [
+        {
+            "Sección": f"S{i}",
+            "Componente (Revestimiento)": NOMBRES_SECCIONES[i],
+            **secciones[i],
+        }
+        for i in SECCIONES
+    ]
     return pd.DataFrame(filas).set_index("Sección")
 
 
 def df_a_secciones(df: pd.DataFrame) -> dict:
     out = {}
-    for i, fila in df.iterrows():
-        out[int(i)] = {c: float(fila[c]) for c in COLUMNAS_SECCION}
+    for idx_val, fila in df.iterrows():
+        sec_num = int(str(idx_val).replace("S", "").strip())
+        out[sec_num] = {c: float(fila[c]) for c in COLUMNAS_SECCION}
     return out
 
 
@@ -313,7 +338,7 @@ def calcular_calendario_y_flujo(params: dict, precio_ton: float):
                 "tipo_parada": tipo_parada,
                 "W_k": horas_detencion,
                 "num_reemplazos": len(secciones_reemplazadas),
-                "secciones": ", ".join(f"S{s}" for s in secciones_reemplazadas) if secciones_reemplazadas else "Sin reemplazo de revestimiento",
+                "secciones": ", ".join(f"S{s} ({NOMBRES_SECCIONES[s]})" for s in secciones_reemplazadas) if secciones_reemplazadas else "Sin intervención de revestimiento",
                 "costo_revestimientos": costo_revestimientos,
                 "costo_indisp": costo_indisp,
                 "costo_total": costos_totales,
@@ -335,7 +360,7 @@ def calcular_calendario_y_flujo(params: dict, precio_ton: float):
             "flujo_neto": flujo_neto,
             "flujo_acumulado": flujo_acumulado,
             "secciones_reemplazadas": secciones_reemplazadas,
-            "reemplazos_txt": ", ".join(f"S{s}" for s in secciones_reemplazadas) if secciones_reemplazadas else "-",
+            "reemplazos_txt": ", ".join(f"S{s} ({NOMBRES_SECCIONES[s]})" for s in secciones_reemplazadas) if secciones_reemplazadas else "-",
         })
 
     return pd.DataFrame(filas_fc), matriz_edad, matriz_reemplazo, molino_estado, pd.DataFrame(eventos_parada)
@@ -487,7 +512,7 @@ with tab_calendario_flujo:
     semanas_seleccionadas = list(range(sem_inicio, sem_fin + 1))
     n_sems = len(semanas_seleccionadas)
 
-    nombres_filas = [f"Sección {i}" for i in range(9, 0, -1)] + ["Molino SAG (Paradas E/P)"]
+    nombres_filas = [f"S{i} · {NOMBRES_SECCIONES[i]}" for i in range(9, 0, -1)] + ["Molino SAG (Paradas E / P)"]
     z_matrix = []
     hover_matrix = []
     annotations_list = []
@@ -500,31 +525,31 @@ with tab_calendario_flujo:
         m = molino_estado[idx]
         if m["es_E"]:
             z_molino.append(2)  # Parada Exógena (Rojo)
-            h_molino.append(f"Semana {s}<br>Componente: Molino SAG<br>Estado: DETENCIÓN EXÓGENA (E)<br>Duración: {m['W_k']:.1f} horas<br>Disponibilidad: {m['disp_pct']:.1f}%")
+            h_molino.append(f"Semana {s} (t={s})<br>Componente: Molino SAG<br>Estado: DETENCIÓN EXÓGENA (E)<br>Duración W_k: {m['W_k']:.1f} horas<br>Disponibilidad: {m['disp_pct']:.1f}%")
             annotations_list.append(dict(
                 x=s,
-                y="Molino SAG (Paradas E/P)",
+                y="Molino SAG (Paradas E / P)",
                 text=f"{m['W_k']:.0f}h",
                 showarrow=False,
                 font=dict(color="#ffffff", size=9, family="ui-monospace, monospace"),
             ))
         elif m["es_P_end"]:
             z_molino.append(2)  # Parada Endógena (Rojo/Parada)
-            h_molino.append(f"Semana {s}<br>Componente: Molino SAG<br>Estado: DETENCIÓN ENDÓGENA (P)<br>Duración: {m['W_k']:.1f} horas (τ_c + ∑τ_i)<br>Disponibilidad: {m['disp_pct']:.1f}%")
+            h_molino.append(f"Semana {s} (t={s})<br>Componente: Molino SAG<br>Estado: DETENCIÓN ENDÓGENA (P, y_{s}=1)<br>Duración W_k: {m['W_k']:.1f} horas (τ_c + ∑τ_i)<br>Disponibilidad: {m['disp_pct']:.1f}%")
             annotations_list.append(dict(
                 x=s,
-                y="Molino SAG (Paradas E/P)",
+                y="Molino SAG (Paradas E / P)",
                 text=f"{m['W_k']:.0f}h",
                 showarrow=False,
                 font=dict(color="#ffffff", size=9, family="ui-monospace, monospace"),
             ))
         else:
             z_molino.append(0)  # Operación normal (Gris normalizado)
-            h_molino.append(f"Semana {s}<br>Componente: Molino SAG<br>Estado: Operación Continua (168 h disponibles)")
+            h_molino.append(f"Semana {s} (t={s})<br>Componente: Molino SAG<br>Estado: Operación Continua (168 h disponibles)")
             if n_sems <= 52:
                 annotations_list.append(dict(
                     x=s,
-                    y="Molino SAG (Paradas E/P)",
+                    y="Molino SAG (Paradas E / P)",
                     text=str(s),
                     showarrow=False,
                     font=dict(color="#475569", size=9, family="ui-monospace, monospace"),
@@ -539,7 +564,7 @@ with tab_calendario_flujo:
         h_s = []
         L_i = float(st.session_state.params["secciones"][i]["L_i"])
         CS_i = float(st.session_state.params["secciones"][i]["CS_i"])
-        nombre_secc = f"Sección {i}"
+        nombre_secc = f"S{i} · {NOMBRES_SECCIONES[i]}"
 
         for s in semanas_seleccionadas:
             idx = s - 1
@@ -557,14 +582,14 @@ with tab_calendario_flujo:
 
             if es_reemp:
                 z_s.append(3)  # REEMPLAZO (Azul)
-                causa_txt = "CAUSA ENDÓGENA (P)" if es_P_end else "CAUSA EXÓGENA (E)"
+                causa_txt = f"CAUSA ENDÓGENA (P, y_{s}=1)" if es_P_end else "CAUSA EXÓGENA (E)"
                 h_s.append(
                     f"Semana {s} (Año {(s-1)//52+1}, Mes {(s-1)//4+1})<br>"
-                    f"Componente: <b>Sección {i}</b><br>"
-                    f"ACCIÓN: <b>REEMPLAZO DE REVESTIMIENTO ({causa_txt})</b><br>"
-                    f"Edad acumulada previa: {edad_act:.0f} semanas (Vida nominal: {L_i:.0f})<br>"
-                    f"Costo recambio: ${CS_i:,.0f}<br>"
-                    f"Parada de molino: {w_k:.0f} horas"
+                    f"Componente: <b>S{i} — {NOMBRES_SECCIONES[i]}</b><br>"
+                    f"ACCIÓN: <b>REEMPLAZO DE REVESTIMIENTO ({causa_txt}, z_{i}{s}=1)</b><br>"
+                    f"Edad acumulada previa: {edad_act:.0f} semanas (Vida nominal L_{i}: {L_i:.0f} sem)<br>"
+                    f"Costo recambio CS_{i}: ${CS_i:,.0f}<br>"
+                    f"Parada de molino W_k: {w_k:.0f} horas"
                 )
                 annotations_list.append(dict(
                     x=s,
@@ -577,8 +602,8 @@ with tab_calendario_flujo:
                 z_s.append(1)  # Parada de planta sin reemplazo de esta sección (Ámbar)
                 h_s.append(
                     f"Semana {s}<br>"
-                    f"Componente: Sección {i}<br>"
-                    f"Estado: Parada de molino ({tipo_parada}) - Sección no intervenida<br>"
+                    f"Componente: <b>S{i} — {NOMBRES_SECCIONES[i]}</b><br>"
+                    f"Estado: Parada de molino ({tipo_parada}) - Sección no intervenida (z_{i}{s}=0)<br>"
                     f"Edad acumulada: {edad_act:.0f} / {L_i:.0f} semanas ({edad_act/L_i*100:.1f}%)"
                 )
                 if n_sems <= 52:
@@ -593,7 +618,7 @@ with tab_calendario_flujo:
                 z_s.append(0)  # Operación normal (Gris normalizado uniforme)
                 h_s.append(
                     f"Semana {s}<br>"
-                    f"Componente: Sección {i}<br>"
+                    f"Componente: <b>S{i} — {NOMBRES_SECCIONES[i]}</b><br>"
                     f"Estado: Operación en servicio<br>"
                     f"Edad acumulada: {edad_act:.0f} / {L_i:.0f} semanas ({edad_act/L_i*100:.1f}%)"
                 )
@@ -645,18 +670,18 @@ with tab_calendario_flujo:
 
     fig_matriz.update_layout(
         template="plotly_white",
-        height=390,
+        height=410,
         annotations=annotations_list,
         font=dict(family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", size=11),
         xaxis=dict(
-            title="Semana del Calendario",
+            title="Semana del Calendario (Horizonte H = 156 semanas)",
             range=[sem_inicio - 0.5, sem_fin + 0.5],
             tickmode="linear",
             tick0=sem_inicio,
             dtick=1 if n_sems <= 26 else (2 if n_sems <= 52 else 12),
         ),
-        yaxis=dict(title="", tickfont=dict(size=12, color="#0f172a")),
-        margin=dict(t=20, b=35, l=160, r=20),
+        yaxis=dict(title="", tickfont=dict(size=11, color="#0f172a")),
+        margin=dict(t=20, b=35, l=240, r=20),
     )
     st.plotly_chart(fig_matriz, width="stretch")
 
@@ -666,19 +691,19 @@ with tab_calendario_flujo:
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px 16px; margin-bottom: 16px; display: flex; gap: 28px; flex-wrap: wrap; font-size: 12px; color: #334155;">
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #1d4ed8; color: #fff; text-align: center; font-weight: bold; line-height: 18px; border-radius: 2px;">R</span>
-            <span><strong>R (Azul):</strong> Semana de Reemplazo de sección (por causa exógena o endógena).</span>
+            <span><strong>R (Azul):</strong> Reemplazo de revestimiento (z_it = 1), por detención exógena E o endógena P.</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #b91c1c; color: #fff; text-align: center; font-size: 10px; font-weight: bold; line-height: 18px; border-radius: 2px;">48h</span>
-            <span><strong>Rojo:</strong> Semana con Parada de Molino (duración en horas).</span>
+            <span><strong>Rojo:</strong> Semana con Detención del Molino SAG (duración W_k en horas).</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #fed7aa; border-radius: 2px;"></span>
-            <span><strong>Ámbar:</strong> Parada donde la sección continúa en servicio sin recambio.</span>
+            <span><strong>Ámbar:</strong> Molino detenido sin intervención de esta sección (z_it = 0).</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #e2e8f0; color: #0f172a; text-align: center; font-size: 11px; font-weight: bold; line-height: 18px; border-radius: 2px;">1</span>
-            <span><strong>Gris normalizado:</strong> Semana de servicio normal continuo con el número visible.</span>
+            <span><strong>Gris normalizado:</strong> Operación normal en servicio continuo.</span>
           </div>
         </div>
         """,
@@ -702,7 +727,7 @@ with tab_calendario_flujo:
                 fila_m.append(f"Endógena {m['W_k']:.0f}h")
             else:
                 fila_m.append("Operando")
-        filas_tabla_mat.append({"Componente": "Molino SAG", **dict(zip(columnas_matriz, fila_m))})
+        filas_tabla_mat.append({"Componente": "Molino SAG (Paradas E / P)", **dict(zip(columnas_matriz, fila_m))})
 
         # Filas Secciones
         for i in SECCIONES:
@@ -713,7 +738,7 @@ with tab_calendario_flujo:
                     fila_i.append("REEMPLAZO (R)")
                 else:
                     fila_i.append(f"{matriz_edad[i][idx]:.0f} sem")
-            filas_tabla_mat.append({"Componente": f"Sección {i}", **dict(zip(columnas_matriz, fila_i))})
+            filas_tabla_mat.append({"Componente": f"S{i} · {NOMBRES_SECCIONES[i]}", **dict(zip(columnas_matriz, fila_i))})
 
         df_calendario_matricial = pd.DataFrame(filas_tabla_mat).set_index("Componente")
         st.dataframe(df_calendario_matricial, width="stretch")
@@ -724,7 +749,7 @@ with tab_calendario_flujo:
     st.markdown(
         """
         <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-top: 14px; margin-bottom: 6px;">
-          Cronograma Detallado de Detenciones y Reemplazos (Exógenas y Endógenas):
+          Cronograma Detallado de Detenciones y Reemplazos (Exógenas E y Endógenas P):
         </div>
         """,
         unsafe_allow_html=True,
@@ -738,15 +763,15 @@ with tab_calendario_flujo:
                 "costo_total": "${:,.0f}",
             }),
             column_config={
-                "semana": "Semana",
+                "semana": "Semana (t)",
                 "año": "Año",
                 "mes": "Mes",
                 "tipo_parada": "Tipo de Detención",
-                "W_k": "Duración Efectiva",
+                "W_k": "Duración Efectiva (W_k)",
                 "num_reemplazos": "N° Secciones Reemplazadas",
-                "secciones": "Secciones Intervenidas",
-                "costo_revestimientos": "Inversión Revestimientos",
-                "costo_indisp": "Costo Indisponibilidad",
+                "secciones": "Revestimientos Intervenidos (Nomenclatura S_i)",
+                "costo_revestimientos": "Inversión Revestimientos (∑CS_i)",
+                "costo_indisp": "Costo Indisponibilidad (C^D · W_k)",
                 "costo_total": "Costo Total Parada",
             },
             width="stretch",
@@ -857,10 +882,10 @@ with tab_calendario_flujo:
             
             # Selector de secciones a intervenir
             secciones_endo = st.multiselect(
-                "Selecciona las secciones a reemplazar en esta detención:",
+                "Selecciona las secciones a reemplazar en esta detención (z_it = 1):",
                 options=SECCIONES,
-                default=[1, 2, 3],
-                format_func=lambda s: f"Sección {s} (τ_{s}={st.session_state.params['secciones'][s]['tau_i']:.0f}h, ${st.session_state.params['secciones'][s]['CS_i']:,.0f})",
+                default=[3, 5],
+                format_func=lambda s: f"S{s} — {NOMBRES_SECCIONES[s]} (τ_{s}={st.session_state.params['secciones'][s]['tau_i']:.1f}h, CS_{s}=${st.session_state.params['secciones'][s]['CS_i']:,.0f})",
                 key="input_secc_endo"
             )
 
@@ -888,16 +913,16 @@ with tab_calendario_flujo:
                     st.rerun()
 
         with c_en2:
-            st.markdown("<div style='font-weight: 600; font-size: 13px; margin-bottom: 6px;'>Detenciones Endógenas Activas:</div>", unsafe_allow_html=True)
+            st.markdown("<div style='font-weight: 600; font-size: 13px; margin-bottom: 6px;'>Detenciones Endógenas Activas (P):</div>", unsafe_allow_html=True)
             p_end_dict = st.session_state.params.get("P_endogenas", {})
             if p_end_dict:
                 filas_p_end = []
                 for s_e, seccs in sorted(p_end_dict.items()):
                     dur_e = tau_c_val + sum(float(st.session_state.params["secciones"][s]["tau_i"]) for s in seccs)
                     filas_p_end.append({
-                        "Semana": s_e,
+                        "Semana (t)": s_e,
                         "Duración": f"{dur_e:.1f} h",
-                        "Secciones": ", ".join(f"S{s}" for s in seccs),
+                        "Revestimientos (S_i)": ", ".join(f"S{s} ({NOMBRES_SECCIONES[s]})" for s in seccs),
                         "Inversión Revestimientos": f"${sum(float(st.session_state.params['secciones'][s]['CS_i']) for s in seccs):,.0f}"
                     })
                 st.dataframe(pd.DataFrame(filas_p_end), width="stretch", hide_index=True)
@@ -1179,8 +1204,15 @@ with tab_secciones:
 
     df_secciones = secciones_a_df(st.session_state.params["secciones"])
     column_config = {
-        c: st.column_config.NumberColumn(c, help=AYUDA_COLUMNAS[c], min_value=0.0, step=0.5)
-        for c in COLUMNAS_SECCION
+        "Componente (Revestimiento)": st.column_config.TextColumn(
+            "Componente Técnico (Revestimiento)",
+            help="Nomenclatura técnica de la sección i según el documento (Cuadro 1).",
+            disabled=True,
+        ),
+        **{
+            c: st.column_config.NumberColumn(c, help=AYUDA_COLUMNAS[c], min_value=0.0, step=0.5)
+            for c in COLUMNAS_SECCION
+        },
     }
     df_editado = st.data_editor(
         df_secciones,
@@ -1201,7 +1233,26 @@ with tab_secciones:
             f"tienen e_i > L_i + R_i. No existen arcos admisibles desde el nodo fuente 0."
         )
     else:
-        st.success("Condición de factibilidad inicial verificada: todas las secciones poseen arcos admisibles desde la fuente 0.")
+        st.success("Condición de factibilidad inicial verificada: todas las secciones poseen arcos admisibles desde la fuente 0 (e_i ≤ L_i + R_i).")
+
+    st.markdown(
+        """
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 14px 18px; margin-top: 18px; font-size: 13px; color: #334155;">
+          <div style="font-weight: 700; color: #0f172a; margin-bottom: 8px; font-size: 14px;">Glosario y Nomenclatura del Documento (Formulación v7 — Cuadro 1)</div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; font-size: 12px; line-height: 1.5;">
+            <div><strong>S_i (i ∈ N = {1, ..., 9}):</strong> Identificador de sección o componente de revestimiento.</div>
+            <div><strong>e_i:</strong> Edad acumulada al inicio del horizonte en t=0 (semanas de operación previa).</div>
+            <div><strong>L_i:</strong> Vida útil nominal de diseño del revestimiento (semanas).</div>
+            <div><strong>R_i:</strong> Sobreuso máximo admisible sobre L_i (semanas). Cota máxima: Δ_ij ≤ L_i + R_i.</div>
+            <div><strong>β_i:</strong> Parámetro de forma de la distribución Weibull (β > 1 indica tasa de desgaste creciente).</div>
+            <div><strong>η_i:</strong> Parámetro de escala de Weibull o vida característica (semanas hasta 63.2% de falla).</div>
+            <div><strong>CS_i:</strong> Costo directo de adquisición, suministro y montaje del revestimiento ($ USD).</div>
+            <div><strong>τ_i:</strong> Tiempo marginal de detención de molino requerido para recambio de la sección (horas).</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ===========================================================================
@@ -1229,6 +1280,22 @@ with tab_global:
     g["precio_ton"] = c5.number_input("Margen neto de producción ($/t tratada)", value=float(g.get("precio_ton", 35.0)), min_value=0.0, step=1.0)
     st.session_state.params["global"] = g
 
+    st.markdown(
+        """
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 14px 18px; margin-top: 18px; font-size: 13px; color: #334155;">
+          <div style="font-weight: 700; color: #0f172a; margin-bottom: 8px; font-size: 14px;">Nomenclatura de Parámetros Globales (Formulación v7 — Cuadro 1)</div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; font-size: 12px; line-height: 1.5;">
+            <div><strong>ρ (rho):</strong> Tasa de tratamiento nominal del mineral procesado (t/semana).</div>
+            <div><strong>τ_c (tau_c):</strong> Tiempo base común de detención por causa endógena en el molino SAG (horas).</div>
+            <div><strong>C^D:</strong> Costo horario de indisponibilidad operacional del molino ($ USD/h).</div>
+            <div><strong>CF:</strong> Costo económico por falla o desprendimiento catastrófico de revestimiento ($ USD).</div>
+            <div><strong>Margen:</strong> Beneficio neto o margen operacional generado por cada tonelada tratada ($ USD/t).</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # ===========================================================================
 # TAB 4 — Riesgo y costo de arco
@@ -1237,14 +1304,19 @@ with tab_riesgo:
     st.markdown(
         """
         <div style="border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 16px;">
-          <div style="font-size: 16px; font-weight: 700; color: #0f172a;">Curvas de Riesgo de Falla y Costo de Arco por Sección</div>
-          <div style="font-size: 13px; color: #64748b;">Evaluación de la distribución Weibull P_i(Δ) y de la función de costo g_i(Δ) (Ecuaciones 3 y 5).</div>
+          <div style="font-size: 16px; font-weight: 700; color: #0f172a;">Curvas de Riesgo de Falla y Costo de Arco por Sección (Ecs. 3 y 5)</div>
+          <div style="font-size: 13px; color: #64748b;">Evaluación de la distribución Weibull P_i(Δ) y de la función de costo esperado g_i(Δ) según la nomenclatura de la Formulación v7.</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    seccion_sel = st.selectbox("Seleccionar Sección:", SECCIONES, key="seccion_riesgo")
+    seccion_sel = st.selectbox(
+        "Seleccionar Sección de Revestimiento:",
+        SECCIONES,
+        format_func=lambda i: f"S{i} — {NOMBRES_SECCIONES[i]}",
+        key="seccion_riesgo"
+    )
     p = st.session_state.params["secciones"][seccion_sel]
     CF = st.session_state.params["global"]["CF"]
 
@@ -1255,8 +1327,8 @@ with tab_riesgo:
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.10,
         subplot_titles=(
-            f"P_{seccion_sel}(Δ) — Probabilidad incondicional de falla acumulada (Weibull)",
-            f"g_{seccion_sel}(Δ) — Costo esperado del arco",
+            f"P_{seccion_sel}(Δ) — Probabilidad acumulada de falla Weibull para S{seccion_sel} ({NOMBRES_SECCIONES[seccion_sel]})",
+            f"g_{seccion_sel}(Δ) — Costo esperado del ciclo (CS_{seccion_sel}=${p['CS_i']:,.0f}, CF=${CF:,.0f})",
         ),
     )
 
@@ -1267,15 +1339,15 @@ with tab_riesgo:
         fig.add_vline(x=cota, line_dash="dot", line_color="#b91c1c", row=row, col=1)
 
     fig.add_trace(go.Scatter(x=df_curva["delta"], y=df_curva["P"], mode="lines",
-                              name="P(Δ)", line=dict(color="#1d4ed8", width=2)), row=1, col=1)
+                              name="P(Δ) Weibull", line=dict(color="#1d4ed8", width=2)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df_curva["delta"], y=df_curva["g_intermedio"], mode="lines",
-                              name="g(Δ), nodo intermedio t ∈ T (con CS_i)", line=dict(color="#d97706", width=2)), row=2, col=1)
+                              name=f"g_{seccion_sel}(Δ), nodo intermedio t ∈ T (con CS_{seccion_sel})", line=dict(color="#d97706", width=2)), row=2, col=1)
     fig.add_trace(go.Scatter(x=df_curva["delta"], y=df_curva["g_terminal"], mode="lines",
-                              name="g(Δ), nodo terminal t = ∞ (solo riesgo)", line=dict(color="#059669", width=2, dash="dash")),
+                              name=f"g_{seccion_sel}(Δ), nodo terminal t = ∞ (solo riesgo)", line=dict(color="#059669", width=2, dash="dash")),
                   row=2, col=1)
 
-    fig.update_yaxes(title_text="Probabilidad", range=[0, 1], row=1, col=1)
-    fig.update_yaxes(title_text="Costo ($)", row=2, col=1)
+    fig.update_yaxes(title_text="Probabilidad P_i(Δ)", range=[0, 1], row=1, col=1)
+    fig.update_yaxes(title_text="Costo Esperado ($)", row=2, col=1)
     fig.update_xaxes(title_text="Edad del ciclo Δ (semanas)", row=2, col=1)
     fig.update_layout(
         template="plotly_white",
@@ -1289,9 +1361,9 @@ with tab_riesgo:
     st.markdown(
         f"""
         <div style="font-size: 12px; color: #475569; margin-top: 6px;">
-          Zona verde: Región admisible Δ ≤ L_i + R_i = {cota:g} semanas (Ec. 6). &nbsp;|&nbsp; 
+          Zona verde: Región admisible Δ ≤ L_{seccion_sel} + R_{seccion_sel} = {cota:g} semanas (Ec. 6). &nbsp;|&nbsp; 
           Zona roja: Poda topológica de arcos. &nbsp;|&nbsp; 
-          Línea punteada gris: L_i = {p['L_i']:g} sem. &nbsp;|&nbsp; Línea punteada roja: L_i + R_i.
+          Línea punteada gris: L_{seccion_sel} = {p['L_i']:g} sem. &nbsp;|&nbsp; Línea punteada roja: L_{seccion_sel} + R_{seccion_sel}.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1305,8 +1377,8 @@ with tab_resumen:
     st.markdown(
         """
         <div style="border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 16px;">
-          <div style="font-size: 16px; font-weight: 700; color: #0f172a;">Dimensión y Variables de la Red de Optimización (Sección 6.1)</div>
-          <div style="font-size: 13px; color: #64748b;">Recuento de arcos admisibles |A_i| y variables de decisión para el resolvedor MILP.</div>
+          <div style="font-size: 16px; font-weight: 700; color: #0f172a;">Dimensión y Variables de la Red de Optimización (Sección 6.1, Formulación v7)</div>
+          <div style="font-size: 13px; color: #64748b;">Recuento de arcos admisibles |A_i| por sección y variables de decisión para el resolvedor MILP.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1319,18 +1391,67 @@ with tab_resumen:
         A_i = generar_arcos_seccion(i, p["e_i"], p["L_i"], p["R_i"], H)
         cota_teorica = (H + 1) * (p["L_i"] + p["R_i"] + 1)
         filas_resumen.append(
-            {"Sección": i, "|A_i|": len(A_i), "Cota teórica (H+1)(L_i+R_i+1)": round(cota_teorica)}
+            {
+                "Sección (S_i)": f"S{i}",
+                "Componente (Revestimiento)": NOMBRES_SECCIONES[i],
+                "|A_i| (Arcos Admisibles)": len(A_i),
+                "Cota Teórica (H+1)(L_i+R_i+1)": round(cota_teorica),
+            }
         )
         total_arcos += len(A_i)
 
-    df_resumen = pd.DataFrame(filas_resumen).set_index("Sección")
+    df_resumen = pd.DataFrame(filas_resumen).set_index("Sección (S_i)")
     st.dataframe(df_resumen, width="stretch")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Variables de flujo x_ij", f"{total_arcos:,}")
-    c2.metric("Variables de intervención z_it (9 × 156)", f"{9 * H:,}")
-    c3.metric("Variables de detención y_t + w_k", f"{H:,}")
+    c1.metric("Variables de flujo x_ij", f"{total_arcos:,}", "∑ |A_i| sobre i ∈ N")
+    c2.metric("Variables de intervención z_it", f"{9 * H:,}", "|N| × |T| = 9 × 156")
+    c3.metric("Variables de detención y_t + w_k", f"{H:,}", "|T| = 156 semanas")
+
+    # Tabla Completa de Nomenclatura del Documento
+    st.markdown(
+        """
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 18px 22px; margin-top: 24px; font-size: 13px; color: #334155;">
+          <div style="font-weight: 700; color: #0f172a; margin-bottom: 12px; font-size: 15px;">Cuadro Sinóptico de Nomenclatura Oficial (Formulación v7)</div>
+          
+          <div style="margin-bottom: 14px;">
+            <div style="font-weight: 700; color: #1e293b; margin-bottom: 4px;">1. Conjuntos e Índices:</div>
+            <ul style="margin: 0; padding-left: 20px; line-height: 1.6; font-size: 12px;">
+              <li><strong>T = {1, ..., H}:</strong> Semanas del horizonte de planificación (H = 156 semanas / 3 años).</li>
+              <li><strong>E ⊂ T:</strong> Conjunto de semanas con detenciones exógenas de planta (duración W_k predeterminada).</li>
+              <li><strong>P = T \ E:</strong> Conjunto de semanas candidatas para detenciones endógenas del molino SAG.</li>
+              <li><strong>N = {1, ..., 9}:</strong> Conjunto de secciones de revestimiento del molino (S_1 a S_9).</li>
+              <li><strong>G_i = (V_i, A_i):</strong> Red acíclica dirigida de ciclos de vida de la sección i ∈ N.</li>
+              <li><strong>V_i = {0} ∪ T ∪ {∞}:</strong> Conjunto de nodos (fuente 0, semanas t ∈ T, y sumidero terminal ∞).</li>
+              <li><strong>A_i:</strong> Conjunto de arcos admisibles j = (s, t) con duración Δ_ij ≤ L_i + R_i.</li>
+            </ul>
+          </div>
+
+          <div style="margin-bottom: 14px;">
+            <div style="font-weight: 700; color: #1e293b; margin-bottom: 4px;">2. Variables de Decisión:</div>
+            <ul style="margin: 0; padding-left: 20px; line-height: 1.6; font-size: 12px;">
+              <li><strong>x_ij ∈ {0, 1}:</strong> Variable binaria de flujo que indica si se selecciona el arco j = (s, t) en la red G_i.</li>
+              <li><strong>z_it ∈ {0, 1}:</strong> Variable binaria de recambio que indica si la sección i se reemplaza en la semana t.</li>
+              <li><strong>y_t ∈ {0, 1}:</strong> Variable binaria de detención endógena que indica si el molino se detiene en la semana t ∈ P.</li>
+              <li><strong>w_k:</strong> Duración efectiva de la detención en la semana t (horas).</li>
+            </ul>
+          </div>
+
+          <div>
+            <div style="font-weight: 700; color: #1e293b; margin-bottom: 4px;">3. Parámetros Técnicos y Económicos:</div>
+            <ul style="margin: 0; padding-left: 20px; line-height: 1.6; font-size: 12px;">
+              <li><strong>S_1 a S_9:</strong> Componentes de revestimiento (Levantadores y placas de tapa alim., cilindro fila 1 y 2, parrillas, levantadores pulpa y cono central).</li>
+              <li><strong>e_i, L_i, R_i:</strong> Edad inicial, vida útil nominal y sobreuso admisible de la sección i.</li>
+              <li><strong>β_i, η_i:</strong> Forma y escala de la distribución Weibull de falla por desgaste.</li>
+              <li><strong>CS_i, τ_i:</strong> Costo directo de reemplazo ($ USD) y tiempo marginal de montaje (horas) de la sección i.</li>
+              <li><strong>ρ, τ_c, C^D, CF:</strong> Tasa de tratamiento nominal (t/sem), tiempo base de parada endógena (h), costo de indisponibilidad ($/h) y penalización por falla catastrófica ($).</li>
+            </ul>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown("<div style='margin-top: 24px; margin-bottom: 16px; border-top: 1px solid #e2e8f0;'></div>", unsafe_allow_html=True)
-    st.markdown("<div style='font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 8px;'>Estructura Actual de Parámetros (JSON)</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 8px;'>Estructura de Parámetros Activa (JSON)</div>", unsafe_allow_html=True)
     st.json(st.session_state.params, expanded=False)
