@@ -122,32 +122,35 @@ st.markdown(
 # Parámetros por defecto
 # ---------------------------------------------------------------------------
 def parametros_por_defecto() -> dict:
-    # 13 paradas típicas cada 12 semanas (48 h cada una) en el horizonte de 156 semanas
-    E_inicial = {w: 48.0 for w in range(12, H + 1, 12)}
-
     return {
         "global": {
-            "rho": 250000.0,    # t/semana
+            "rho": 250000.0,    # t/semana (tasa nominal de tratamiento)
             "tau_c": 12.0,      # h (tiempo común de parada endógena)
-            "C_D": 600.0,       # $/h
+            "C_D": 600.0,       # $/h (costo horario de indisponibilidad)
             "CF": 120000.0,     # $ (costo de falla catastrófica)
-            "precio_ton": 35.0, # $/t (margen o valor neto por tonelada tratada)
+            "precio_ton": 35.0, # $/t (margen neto por tonelada tratada)
         },
         "secciones": {
-            i: {
-                "e_i": 0.0,
-                "L_i": 40.0,
-                "R_i": 8.0,
-                "beta_i": 2.2,
-                "eta_i": 48.0,
-                "CS_i": 22000.0,
-                "tau_i": 4.0,
-            }
-            for i in SECCIONES
+            1: {"e_i": 8.0, "L_i": 36.0, "R_i": 6.0, "beta_i": 2.4, "eta_i": 42.0, "CS_i": 26000.0, "tau_i": 4.0},
+            2: {"e_i": 12.0, "L_i": 48.0, "R_i": 8.0, "beta_i": 2.1, "eta_i": 56.0, "CS_i": 19000.0, "tau_i": 3.5},
+            3: {"e_i": 4.0, "L_i": 24.0, "R_i": 4.0, "beta_i": 2.8, "eta_i": 28.0, "CS_i": 34000.0, "tau_i": 6.0},
+            4: {"e_i": 10.0, "L_i": 40.0, "R_i": 8.0, "beta_i": 2.3, "eta_i": 46.0, "CS_i": 23000.0, "tau_i": 4.0},
+            5: {"e_i": 6.0, "L_i": 28.0, "R_i": 6.0, "beta_i": 2.6, "eta_i": 33.0, "CS_i": 31000.0, "tau_i": 5.0},
+            6: {"e_i": 14.0, "L_i": 44.0, "R_i": 8.0, "beta_i": 2.2, "eta_i": 50.0, "CS_i": 21000.0, "tau_i": 3.5},
+            7: {"e_i": 6.0, "L_i": 32.0, "R_i": 6.0, "beta_i": 2.5, "eta_i": 37.0, "CS_i": 28000.0, "tau_i": 4.5},
+            8: {"e_i": 16.0, "L_i": 52.0, "R_i": 10.0, "beta_i": 2.0, "eta_i": 60.0, "CS_i": 29000.0, "tau_i": 4.0},
+            9: {"e_i": 20.0, "L_i": 60.0, "R_i": 12.0, "beta_i": 1.9, "eta_i": 70.0, "CS_i": 17000.0, "tau_i": 3.0},
         },
-        "E": E_inicial,
-        # P_endogenas: dict {semana (int): list[int] de secciones a reemplazar}
-        "P_endogenas": {},
+        "E": {
+            12: 48.0, 24: 48.0, 36: 48.0, 48: 72.0,
+            60: 48.0, 72: 48.0, 84: 48.0, 96: 72.0,
+            108: 48.0, 120: 48.0, 132: 48.0, 144: 72.0,
+            156: 48.0,
+        },
+        "P_endogenas": {
+            78: [3, 5],
+            126: [3, 7],
+        },
     }
 
 
@@ -353,28 +356,33 @@ with st.sidebar:
 
     json_actual = json.dumps(st.session_state.params, indent=2, ensure_ascii=False)
     st.download_button(
-        "Descargar parámetros (JSON)",
+        "Descargar configuración actual (JSON)",
         data=json_actual,
         file_name="parametros_sag.json",
         mime="application/json",
         width="stretch",
     )
 
-    archivo = st.file_uploader("Cargar archivo JSON", type=["json"])
+    if st.button("Cargar propuesta recomendada (Formulación v7)", width="stretch"):
+        st.session_state.params = parametros_por_defecto()
+        st.success("Propuesta integral recomendada cargada correctamente.")
+        st.rerun()
+
+    archivo = st.file_uploader("Cargar archivo JSON personalizado", type=["json"])
     if archivo is not None:
-        if st.button("Aplicar archivo cargado", width="stretch"):
+        if st.button("Aplicar archivo JSON cargado", width="stretch"):
             try:
                 cargado = json.load(archivo)
                 cargado["secciones"] = {int(k): v for k, v in cargado["secciones"].items()}
                 cargado["E"] = {int(k): v for k, v in cargado.get("E", {}).items()}
                 cargado["P_endogenas"] = {int(k): list(v) for k, v in cargado.get("P_endogenas", {}).items()}
                 st.session_state.params = cargado
-                st.success("Parámetros cargados exitosamente.")
+                st.success("Parámetros cargados exitosamente desde JSON.")
                 st.rerun()
             except Exception as e:
-                st.error(f"Error al leer archivo: {e}")
+                st.error(f"Error al leer archivo JSON: {e}")
 
-    if st.button("Restaurar valores de referencia", width="stretch"):
+    if st.button("Restablecer parámetros", width="stretch"):
         st.session_state.params = parametros_por_defecto()
         st.rerun()
 

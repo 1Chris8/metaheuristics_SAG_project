@@ -1,0 +1,135 @@
+{
+  "metadata": {
+    "titulo": "Propuesta Integral de Parámetros Técnicos y Operacionales - Molino SAG",
+    "version": "7.0",
+    "fecha_generacion": "2026-09-23",
+    "horizonte_semanas": 156,
+    "unidades": {
+      "tiempo_semanal": "semanas (H = 156, equivalente a 3 años)",
+      "duracion_detencion": "horas (W_k, tau_c, tau_i)",
+      "tasa_tratamiento": "toneladas métricas / semana (rho)",
+      "costos": "USD ($)"
+    },
+    "nombres_secciones": {
+      "1": "Levantadores Tapa Alimentación",
+      "2": "Placas Tapa Alimentación",
+      "3": "Levantadores Cilindro Fila 1 (Alto Impacto)",
+      "4": "Placas Cilindro Fila 1",
+      "5": "Levantadores Cilindro Fila 2",
+      "6": "Placas Cilindro Fila 2",
+      "7": "Parrillas de Descarga",
+      "8": "Levantadores de Pulpa",
+      "9": "Anillos y Cono Central de Descarga"
+    },
+    "descripcion": "Propuesta integral balanceada para optimización de mantenimiento y reemplazo oportunista de revestimientos de molino SAG (Formulación v7). Incluye 9 secciones con parámetros físicos, vidas nominales y distribuciones de Weibull diferenciadas, 13 detenciones exógenas de planta (con turnarounds anuales de 72h) y 2 detenciones endógenas estratégicas."
+  },
+  "global": {
+    "rho": 250000.0,
+    "tau_c": 12.0,
+    "C_D": 600.0,
+    "CF": 120000.0,
+    "precio_ton": 35.0
+  },
+  "secciones": {
+    "1": {
+      "e_i": 8.0,
+      "L_i": 36.0,
+      "R_i": 6.0,
+      "beta_i": 2.4,
+      "eta_i": 42.0,
+      "CS_i": 26000.0,
+      "tau_i": 4.0
+    },
+    "2": {
+      "e_i": 12.0,
+      "L_i": 48.0,
+      "R_i": 8.0,
+      "beta_i": 2.1,
+      "eta_i": 56.0,
+      "CS_i": 19000.0,
+      "tau_i": 3.5
+    },
+    "3": {
+      "e_i": 4.0,
+      "L_i": 24.0,
+      "R_i": 4.0,
+      "beta_i": 2.8,
+      "eta_i": 28.0,
+      "CS_i": 34000.0,
+      "tau_i": 6.0
+    },
+    "4": {
+      "e_i": 10.0,
+      "L_i": 40.0,
+      "R_i": 8.0,
+      "beta_i": 2.3,
+      "eta_i": 46.0,
+      "CS_i": 23000.0,
+      "tau_i": 4.0
+    },
+    "5": {
+      "e_i": 6.0,
+      "L_i": 28.0,
+      "R_i": 6.0,
+      "beta_i": 2.6,
+      "eta_i": 33.0,
+      "CS_i": 31000.0,
+      "tau_i": 5.0
+    },
+    "6": {
+      "e_i": 14.0,
+      "L_i": 44.0,
+      "R_i": 8.0,
+      "beta_i": 2.2,
+      "eta_i": 50.0,
+      "CS_i": 21000.0,
+      "tau_i": 3.5
+    },
+    "7": {
+      "e_i": 6.0,
+      "L_i": 32.0,
+      "R_i": 6.0,
+      "beta_i": 2.5,
+      "eta_i": 37.0,
+      "CS_i": 28000.0,
+      "tau_i": 4.5
+    },
+    "8": {
+      "e_i": 16.0,
+      "L_i": 52.0,
+      "R_i": 10.0,
+      "beta_i": 2.0,
+      "eta_i": 60.0,
+      "CS_i": 29000.0,
+      "tau_i": 4.0
+    },
+    "9": {
+      "e_i": 20.0,
+      "L_i": 60.0,
+      "R_i": 12.0,
+      "beta_i": 1.9,
+      "eta_i": 70.0,
+      "CS_i": 17000.0,
+      "tau_i": 3.0
+    }
+  },
+  "E": {
+    "12": 48.0,
+    "24": 48.0,
+    "36": 48.0,
+    "48": 72.0,
+    "60": 48.0,
+    "72": 48.0,
+    "84": 48.0,
+    "96": 72.0,
+    "108": 48.0,
+    "120": 48.0,
+    "132": 48.0,
+    "144": 72.0,
+    "156": 48.0
+  },
+  "P_endogenas": {
+    "78": [3, 5],
+    "126": [3, 7]
+  }
+}
