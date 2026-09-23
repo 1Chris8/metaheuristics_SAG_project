@@ -2,8 +2,8 @@
 Sistema de Planificación de Reemplazo de Revestimientos SAG — Formulación v7
 =============================================================================
 Aplicación para configuración de parámetros del modelo, programación de
-detenciones del molino, visualización del calendario semanal de secciones y
-simulación del flujo de caja en el horizonte de 156 semanas.
+detenciones exógenas (E) y endógenas (P), visualización del calendario semanal
+de secciones y simulación del flujo de caja en el horizonte de 156 semanas.
 """
 
 from __future__ import annotations
@@ -112,22 +112,6 @@ st.markdown(
         color: #64748b;
         margin-top: 3px;
       }
-      .badge-replace {
-        background-color: #1d4ed8;
-        color: #ffffff;
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-weight: bold;
-        font-size: 11px;
-      }
-      .badge-stop {
-        background-color: #b91c1c;
-        color: #ffffff;
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-weight: bold;
-        font-size: 11px;
-      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -144,7 +128,7 @@ def parametros_por_defecto() -> dict:
     return {
         "global": {
             "rho": 250000.0,    # t/semana
-            "tau_c": 12.0,      # h
+            "tau_c": 12.0,      # h (tiempo común de parada endógena)
             "C_D": 600.0,       # $/h
             "CF": 120000.0,     # $ (costo de falla catastrófica)
             "precio_ton": 35.0, # $/t (margen o valor neto por tonelada tratada)
@@ -162,6 +146,8 @@ def parametros_por_defecto() -> dict:
             for i in SECCIONES
         },
         "E": E_inicial,
+        # P_endogenas: dict {semana (int): list[int] de secciones a reemplazar}
+        "P_endogenas": {},
     }
 
 
@@ -223,16 +209,19 @@ def curva_riesgo_costo(p: dict, CF: float, x_max: int) -> pd.DataFrame:
 
 # ---------------------------------------------------------------------------
 # Cálculo simultáneo del Calendario por Sección y Flujo de Caja
+# (Incorpora tanto paradas exógenas E como paradas endógenas P)
 # ---------------------------------------------------------------------------
 def calcular_calendario_y_flujo(params: dict, precio_ton: float):
     g = params["global"]
     rho = float(g.get("rho", 250000.0))
     C_D = float(g.get("C_D", 600.0))
+    tau_c = float(g.get("tau_c", 12.0))
     E = params.get("E", {})
+    P_endogenas = params.get("P_endogenas", {})
     secciones = params["secciones"]
 
     edades = {i: float(secciones[i]["e_i"]) for i in SECCIONES}
-    semanas_E_ordenadas = sorted(E.keys())
+    todas_paradas = sorted(set(E.keys()) | set(P_endogenas.keys()))
 
     filas_fc = []
     flujo_acumulado = 0.0
@@ -244,9 +233,20 @@ def calcular_calendario_y_flujo(params: dict, precio_ton: float):
 
     for t in range(1, H + 1):
         es_E = t in E
-        W_k = float(E[t]) if es_E else 0.0
+        es_P_end = (t in P_endogenas) and not es_E
 
-        horas_detencion = min(168.0, W_k)
+        if es_E:
+            horas_detencion = min(168.0, float(E[t]))
+            tipo_parada = "Exógena (E)"
+        elif es_P_end:
+            seccs_a_cambiar = P_endogenas[t]
+            duracion_end = tau_c + sum(float(secciones[s]["tau_i"]) for s in seccs_a_cambiar if s in SECCIONES)
+            horas_detencion = min(168.0, duracion_end)
+            tipo_parada = "Endógena (P)"
+        else:
+            horas_detencion = 0.0
+            tipo_parada = "Operación continua"
+
         horas_operacion = max(0.0, 168.0 - horas_detencion)
         disp_pct = (horas_operacion / 168.0) * 100.0
 
@@ -257,14 +257,16 @@ def calcular_calendario_y_flujo(params: dict, precio_ton: float):
         costo_revestimientos = 0.0
         secciones_reemplazadas = []
 
-        proximas_paradas = [s for s in semanas_E_ordenadas if s > t]
+        proximas_paradas = [s for s in todas_paradas if s > t]
         proxima_parada = proximas_paradas[0] if proximas_paradas else (H + 1)
         delta_prox = proxima_parada - t
 
         molino_estado.append({
             "semana": t,
             "es_E": es_E,
-            "W_k": W_k,
+            "es_P_end": es_P_end,
+            "tipo_parada": tipo_parada,
+            "W_k": horas_detencion,
             "disp_pct": disp_pct
         })
 
@@ -276,10 +278,14 @@ def calcular_calendario_y_flujo(params: dict, precio_ton: float):
 
             reemplazar = False
             if es_E:
-                # Criterio de reemplazo en parada t: si cumplió L_i o no sobrevivirá hasta la próxima parada
+                # Regla de reemplazo oportunista en parada exógena E
                 if edad_actual >= L_i:
                     reemplazar = True
                 elif (edad_actual + delta_prox) > cota:
+                    reemplazar = True
+            elif es_P_end:
+                # Reemplazo por causa endógena definida en semana t
+                if i in P_endogenas[t]:
                     reemplazar = True
 
             matriz_edad[i].append(edad_actual)
@@ -296,12 +302,13 @@ def calcular_calendario_y_flujo(params: dict, precio_ton: float):
         flujo_neto = ingreso - costos_totales
         flujo_acumulado += flujo_neto
 
-        if es_E:
+        if es_E or es_P_end:
             eventos_parada.append({
                 "semana": t,
                 "año": (t - 1) // 52 + 1,
                 "mes": (t - 1) // 4 + 1,
-                "W_k": W_k,
+                "tipo_parada": tipo_parada,
+                "W_k": horas_detencion,
                 "num_reemplazos": len(secciones_reemplazadas),
                 "secciones": ", ".join(f"S{s}" for s in secciones_reemplazadas) if secciones_reemplazadas else "Sin reemplazo de revestimiento",
                 "costo_revestimientos": costo_revestimientos,
@@ -313,8 +320,8 @@ def calcular_calendario_y_flujo(params: dict, precio_ton: float):
             "semana": t,
             "año": (t - 1) // 52 + 1,
             "mes": (t - 1) // 4 + 1,
-            "clase": "E" if es_E else "P",
-            "W_k": W_k,
+            "clase": "E" if es_E else ("P (Endógena)" if es_P_end else "P"),
+            "W_k": horas_detencion,
             "horas_operacion": horas_operacion,
             "disponibilidad_pct": disp_pct,
             "prod_ton": prod_ton,
@@ -360,6 +367,7 @@ with st.sidebar:
                 cargado = json.load(archivo)
                 cargado["secciones"] = {int(k): v for k, v in cargado["secciones"].items()}
                 cargado["E"] = {int(k): v for k, v in cargado.get("E", {}).items()}
+                cargado["P_endogenas"] = {int(k): list(v) for k, v in cargado.get("P_endogenas", {}).items()}
                 st.session_state.params = cargado
                 st.success("Parámetros cargados exitosamente.")
                 st.rerun()
@@ -397,7 +405,7 @@ st.markdown(
       <div style="font-size: 13px; color: #cbd5e1; display: flex; gap: 24px; flex-wrap: wrap;">
         <span>Horizonte de Planificación: <strong style="color: #ffffff;">156 semanas (3 años)</strong></span>
         <span>Componentes: <strong style="color: #ffffff;">9 secciones de revestimiento</strong></span>
-        <span>Modelo: <strong style="color: #ffffff;">Optimización MILP de flujo en redes</strong></span>
+        <span>Detenciones: <strong style="color: #ffffff;">Exógenas de Planta (E) y Endógenas de Revestimientos (P)</strong></span>
       </div>
     </div>
     """,
@@ -432,7 +440,7 @@ with tab_calendario_flujo:
         """
         <div style="border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 16px;">
           <div style="font-size: 16px; font-weight: 700; color: #0f172a;">1. Calendario Semanal de los 3 Años: Secciones vs. Semanas y Reemplazos</div>
-          <div style="font-size: 13px; color: #64748b;">Matriz de programación semanal que detalla en qué semana se reemplaza cada sección y el estado operativo del molino SAG.</div>
+          <div style="font-size: 13px; color: #64748b;">Matriz de programación semanal que detalla en qué semana se reemplaza cada sección (por causa exógena o endógena) y el estado operativo del molino SAG.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -471,7 +479,7 @@ with tab_calendario_flujo:
     semanas_seleccionadas = list(range(sem_inicio, sem_fin + 1))
     n_sems = len(semanas_seleccionadas)
 
-    nombres_filas = [f"Sección {i}" for i in range(9, 0, -1)] + ["Molino SAG (Paradas E)"]
+    nombres_filas = [f"Sección {i}" for i in range(9, 0, -1)] + ["Molino SAG (Paradas E/P)"]
     z_matrix = []
     hover_matrix = []
     annotations_list = []
@@ -483,14 +491,24 @@ with tab_calendario_flujo:
         idx = s - 1
         m = molino_estado[idx]
         if m["es_E"]:
-            z_molino.append(2)  # Parada de planta (Rojo)
-            h_molino.append(f"Semana {s}<br>Componente: Molino SAG<br>Estado: DETENCIÓN PROGRAMADA (E)<br>Duración: {m['W_k']:.1f} horas<br>Disponibilidad: {m['disp_pct']:.1f}%")
+            z_molino.append(2)  # Parada Exógena (Rojo)
+            h_molino.append(f"Semana {s}<br>Componente: Molino SAG<br>Estado: DETENCIÓN EXÓGENA (E)<br>Duración: {m['W_k']:.1f} horas<br>Disponibilidad: {m['disp_pct']:.1f}%")
             annotations_list.append(dict(
                 x=s,
-                y="Molino SAG (Paradas E)",
+                y="Molino SAG (Paradas E/P)",
                 text=f"{m['W_k']:.0f}h",
                 showarrow=False,
-                font=dict(color="#ffffff", size=10, family="ui-monospace, monospace"),
+                font=dict(color="#ffffff", size=9, family="ui-monospace, monospace"),
+            ))
+        elif m["es_P_end"]:
+            z_molino.append(2)  # Parada Endógena (Rojo/Parada)
+            h_molino.append(f"Semana {s}<br>Componente: Molino SAG<br>Estado: DETENCIÓN ENDÓGENA (P)<br>Duración: {m['W_k']:.1f} horas (τ_c + ∑τ_i)<br>Disponibilidad: {m['disp_pct']:.1f}%")
+            annotations_list.append(dict(
+                x=s,
+                y="Molino SAG (Paradas E/P)",
+                text=f"{m['W_k']:.0f}h",
+                showarrow=False,
+                font=dict(color="#ffffff", size=9, family="ui-monospace, monospace"),
             ))
         else:
             z_molino.append(0)  # Operación normal (Gris normalizado)
@@ -498,7 +516,7 @@ with tab_calendario_flujo:
             if n_sems <= 52:
                 annotations_list.append(dict(
                     x=s,
-                    y="Molino SAG (Paradas E)",
+                    y="Molino SAG (Paradas E/P)",
                     text=str(s),
                     showarrow=False,
                     font=dict(color="#475569", size=9, family="ui-monospace, monospace"),
@@ -520,9 +538,10 @@ with tab_calendario_flujo:
             es_reemp = matriz_reemplazo[i][idx]
             edad_act = matriz_edad[i][idx]
             es_E = molino_estado[idx]["es_E"]
+            es_P_end = molino_estado[idx]["es_P_end"]
+            tipo_parada = molino_estado[idx]["tipo_parada"]
             w_k = molino_estado[idx]["W_k"]
 
-            # Texto numérico a mostrar en la celda
             if modo_etiqueta == "Número de Semana":
                 numero_mostrar = str(s)
             else:
@@ -530,13 +549,14 @@ with tab_calendario_flujo:
 
             if es_reemp:
                 z_s.append(3)  # REEMPLAZO (Azul)
+                causa_txt = "CAUSA ENDÓGENA (P)" if es_P_end else "CAUSA EXÓGENA (E)"
                 h_s.append(
                     f"Semana {s} (Año {(s-1)//52+1}, Mes {(s-1)//4+1})<br>"
                     f"Componente: <b>Sección {i}</b><br>"
-                    f"ACCIÓN: <b>REEMPLAZO DE REVESTIMIENTO</b><br>"
+                    f"ACCIÓN: <b>REEMPLAZO DE REVESTIMIENTO ({causa_txt})</b><br>"
                     f"Edad acumulada previa: {edad_act:.0f} semanas (Vida nominal: {L_i:.0f})<br>"
                     f"Costo recambio: ${CS_i:,.0f}<br>"
-                    f"Parada de planta: {w_k:.0f} horas"
+                    f"Parada de molino: {w_k:.0f} horas"
                 )
                 annotations_list.append(dict(
                     x=s,
@@ -545,12 +565,12 @@ with tab_calendario_flujo:
                     showarrow=False,
                     font=dict(color="#ffffff", size=11, family="ui-monospace, monospace"),
                 ))
-            elif es_E:
-                z_s.append(1)  # Parada de planta sin reemplazo (Ámbar suave)
+            elif es_E or es_P_end:
+                z_s.append(1)  # Parada de planta sin reemplazo de esta sección (Ámbar)
                 h_s.append(
                     f"Semana {s}<br>"
                     f"Componente: Sección {i}<br>"
-                    f"Estado: Parada de planta (no requiere reemplazo)<br>"
+                    f"Estado: Parada de molino ({tipo_parada}) - Sección no intervenida<br>"
                     f"Edad acumulada: {edad_act:.0f} / {L_i:.0f} semanas ({edad_act/L_i*100:.1f}%)"
                 )
                 if n_sems <= 52:
@@ -584,11 +604,6 @@ with tab_calendario_flujo:
     z_matrix = filas_secciones_z + [z_molino]
     hover_matrix = filas_secciones_h + [h_molino]
 
-    # Paleta normalizada discreta:
-    # 0 = Gris normalizado uniforme (#e2e8f0) para operación en servicio
-    # 1 = Ámbar suave (#fed7aa) para parada sin recambio de sección
-    # 2 = Rojo (#b91c1c) para parada del Molino SAG
-    # 3 = Azul (#1d4ed8) para reemplazo programado R
     colorscale = [
         [0.00, "#e2e8f0"],
         [0.25, "#e2e8f0"],
@@ -633,7 +648,7 @@ with tab_calendario_flujo:
             dtick=1 if n_sems <= 26 else (2 if n_sems <= 52 else 12),
         ),
         yaxis=dict(title="", tickfont=dict(size=12, color="#0f172a")),
-        margin=dict(t=20, b=35, l=150, r=20),
+        margin=dict(t=20, b=35, l=160, r=20),
     )
     st.plotly_chart(fig_matriz, width="stretch")
 
@@ -643,19 +658,19 @@ with tab_calendario_flujo:
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px 16px; margin-bottom: 16px; display: flex; gap: 28px; flex-wrap: wrap; font-size: 12px; color: #334155;">
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #1d4ed8; color: #fff; text-align: center; font-weight: bold; line-height: 18px; border-radius: 2px;">R</span>
-            <span><strong>R (Azul):</strong> Semana de Reemplazo de sección en detención programada.</span>
+            <span><strong>R (Azul):</strong> Semana de Reemplazo de sección (por causa exógena o endógena).</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #b91c1c; color: #fff; text-align: center; font-size: 10px; font-weight: bold; line-height: 18px; border-radius: 2px;">48h</span>
-            <span><strong>Rojo:</strong> Semana con Parada de Molino SAG (duración W_k horas).</span>
+            <span><strong>Rojo:</strong> Semana con Parada de Molino (duración en horas).</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #fed7aa; border-radius: 2px;"></span>
-            <span><strong>Ámbar:</strong> Parada de planta donde la sección continúa en servicio sin recambio.</span>
+            <span><strong>Ámbar:</strong> Parada donde la sección continúa en servicio sin recambio.</span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="display: inline-block; width: 18px; height: 18px; background-color: #e2e8f0; color: #0f172a; text-align: center; font-size: 11px; font-weight: bold; line-height: 18px; border-radius: 2px;">1</span>
-            <span><strong>Gris normalizado:</strong> Semana de servicio normal continuo con el número de semana claramente visible.</span>
+            <span><strong>Gris normalizado:</strong> Semana de servicio normal continuo con el número visible.</span>
           </div>
         </div>
         """,
@@ -673,7 +688,12 @@ with tab_calendario_flujo:
         fila_m = []
         for s in semanas_seleccionadas:
             m = molino_estado[s - 1]
-            fila_m.append(f"Parada {m['W_k']:.0f}h" if m["es_E"] else "Operando")
+            if m["es_E"]:
+                fila_m.append(f"Exógena {m['W_k']:.0f}h")
+            elif m["es_P_end"]:
+                fila_m.append(f"Endógena {m['W_k']:.0f}h")
+            else:
+                fila_m.append("Operando")
         filas_tabla_mat.append({"Componente": "Molino SAG", **dict(zip(columnas_matriz, fila_m))})
 
         # Filas Secciones
@@ -696,7 +716,7 @@ with tab_calendario_flujo:
     st.markdown(
         """
         <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-top: 14px; margin-bottom: 6px;">
-          Cronograma Detallado de Detenciones y Reemplazos por Parada Programada:
+          Cronograma Detallado de Detenciones y Reemplazos (Exógenas y Endógenas):
         </div>
         """,
         unsafe_allow_html=True,
@@ -713,7 +733,8 @@ with tab_calendario_flujo:
                 "semana": "Semana",
                 "año": "Año",
                 "mes": "Mes",
-                "W_k": "Duración W_k",
+                "tipo_parada": "Tipo de Detención",
+                "W_k": "Duración Efectiva",
                 "num_reemplazos": "N° Secciones Reemplazadas",
                 "secciones": "Secciones Intervenidas",
                 "costo_revestimientos": "Inversión Revestimientos",
@@ -729,78 +750,160 @@ with tab_calendario_flujo:
     st.markdown("<div style='margin-top: 28px; margin-bottom: 24px; border-top: 1px solid #e2e8f0;'></div>", unsafe_allow_html=True)
 
     # -----------------------------------------------------------------------
-    # SECCIÓN 2: Configuración de Detenciones Programadas
+    # SECCIÓN 2: Configuración de Detenciones Programadas (E y P)
     # -----------------------------------------------------------------------
     st.markdown(
         """
         <div style="border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 16px;">
-          <div style="font-size: 16px; font-weight: 700; color: #0f172a;">2. Programación de Detenciones de Planta (Conjunto E)</div>
-          <div style="font-size: 13px; color: #64748b;">Ajuste de semanas con parada preprogramada y ventana disponible W_k en horas.</div>
+          <div style="font-size: 16px; font-weight: 700; color: #0f172a;">2. Programación de Detenciones: Exógenas (E) y Endógenas (P)</div>
+          <div style="font-size: 13px; color: #64748b;">Configura paradas de planta generales (E) o paradas forzadas exclusivas del molino para cambio de revestimientos (P).</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    with st.expander("Generador Rápido de Paradas Periódicas y Programas Típicos", expanded=False):
-        c_p1, c_p2, c_p3 = st.columns([2, 2, 3])
-        with c_p1:
-            freq_gen = st.number_input("Intervalo (cada N semanas)", min_value=1, max_value=52, value=12, step=1)
-        with c_p2:
-            dur_gen = st.number_input("Duración W_k (horas)", min_value=1.0, max_value=168.0, value=48.0, step=6.0)
-        with c_p3:
-            st.write("Acciones:")
-            c_b1, c_b2 = st.columns(2)
-            if c_b1.button("Generar periódicas", width="stretch"):
-                st.session_state.params["E"] = {w: float(dur_gen) for w in range(freq_gen, H + 1, freq_gen)}
+    tab_paradas_exo, tab_paradas_endo = st.tabs(
+        ["Detenciones Exógenas de Planta (Conjunto E)", "Detenciones Endógenas de Revestimiento (Conjunto P)"]
+    )
+
+    # SUBTAB A: Detenciones Exógenas E
+    with tab_paradas_exo:
+        with st.expander("Generador Rápido de Paradas Periódicas y Programas Típicos", expanded=False):
+            c_p1, c_p2, c_p3 = st.columns([2, 2, 3])
+            with c_p1:
+                freq_gen = st.number_input("Intervalo (cada N semanas)", min_value=1, max_value=52, value=12, step=1)
+            with c_p2:
+                dur_gen = st.number_input("Duración W_k (horas)", min_value=1.0, max_value=168.0, value=48.0, step=6.0)
+            with c_p3:
+                st.write("Acciones:")
+                c_b1, c_b2 = st.columns(2)
+                if c_b1.button("Generar periódicas", width="stretch"):
+                    st.session_state.params["E"] = {w: float(dur_gen) for w in range(freq_gen, H + 1, freq_gen)}
+                    st.rerun()
+                if c_b2.button("Limpiar paradas E", width="stretch"):
+                    st.session_state.params["E"] = {}
+                    st.rerun()
+
+            st.markdown("<div style='font-size: 12px; font-weight: 600; color: #475569; margin-top: 10px; margin-bottom: 6px;'>Programas típicos:</div>", unsafe_allow_html=True)
+            b1, b2, b3 = st.columns(3)
+            if b1.button("Estándar: Cada 12 sem (48 h)", width="stretch"):
+                st.session_state.params["E"] = {w: 48.0 for w in range(12, H + 1, 12)}
                 st.rerun()
-            if c_b2.button("Limpiar paradas", width="stretch"):
-                st.session_state.params["E"] = {}
+            if b2.button("Mayor: Cada 16 sem (72 h)", width="stretch"):
+                st.session_state.params["E"] = {w: 72.0 for w in range(16, H + 1, 16)}
+                st.rerun()
+            if b3.button("Frecuente: Cada 8 sem (36 h)", width="stretch"):
+                st.session_state.params["E"] = {w: 36.0 for w in range(8, H + 1, 8)}
                 st.rerun()
 
-        st.markdown("<div style='font-size: 12px; font-weight: 600; color: #475569; margin-top: 10px; margin-bottom: 6px;'>Programas típicos:</div>", unsafe_allow_html=True)
-        b1, b2, b3 = st.columns(3)
-        if b1.button("Estándar: Cada 12 sem (48 h)", width="stretch"):
-            st.session_state.params["E"] = {w: 48.0 for w in range(12, H + 1, 12)}
-            st.rerun()
-        if b2.button("Mayor: Cada 16 sem (72 h)", width="stretch"):
-            st.session_state.params["E"] = {w: 72.0 for w in range(16, H + 1, 16)}
-            st.rerun()
-        if b3.button("Frecuente: Cada 8 sem (36 h)", width="stretch"):
-            st.session_state.params["E"] = {w: 36.0 for w in range(8, H + 1, 8)}
-            st.rerun()
+        c_ed1, c_ed2 = st.columns([3, 2])
+        with c_ed1:
+            st.markdown("<div style='font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 6px;'>Tabla de semanas con parada exógena de planta (E):</div>", unsafe_allow_html=True)
+            df_E_actual = E_a_df(st.session_state.params["E"])
+            df_E_editado = st.data_editor(
+                df_E_actual,
+                num_rows="dynamic",
+                width="stretch",
+                height=200,
+                column_config={
+                    "semana": st.column_config.NumberColumn("Semana", min_value=1, max_value=H, step=1),
+                    "W_k": st.column_config.NumberColumn("W_k (horas)", min_value=0.5, max_value=168.0, step=1.0),
+                },
+                key="editor_E_tab1",
+            )
+            st.session_state.params["E"] = df_a_E(df_E_editado)
 
-    c_ed1, c_ed2 = st.columns([3, 2])
-    with c_ed1:
-        st.markdown("<div style='font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 6px;'>Tabla de semanas con parada de planta (E):</div>", unsafe_allow_html=True)
-        df_E_actual = E_a_df(st.session_state.params["E"])
-        df_E_editado = st.data_editor(
-            df_E_actual,
-            num_rows="dynamic",
-            width="stretch",
-            height=200,
-            column_config={
-                "semana": st.column_config.NumberColumn("Semana", min_value=1, max_value=H, step=1),
-                "W_k": st.column_config.NumberColumn("W_k (horas)", min_value=0.5, max_value=168.0, step=1.0),
-            },
-            key="editor_E_tab1",
-        )
-        st.session_state.params["E"] = df_a_E(df_E_editado)
+        with c_ed2:
+            total_paradas_e = len(st.session_state.params["E"])
+            total_horas_e = sum(st.session_state.params["E"].values())
+            st.markdown(
+                f"""
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 14px 18px; border-radius: 4px; font-size: 13px; color: #334155; margin-top: 24px;">
+                  <div style="font-weight: 700; color: #0f172a; margin-bottom: 8px;">Detenciones Exógenas (E)</div>
+                  Semanas configuradas: <strong>{total_paradas_e}</strong><br>
+                  Horas de parada: <strong>{total_horas_e:,.1f} h</strong><br>
+                  Ventana de intervención: <strong>Fijada por planta (W_k)</strong>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-    with c_ed2:
-        total_paradas = len(st.session_state.params["E"])
-        total_horas_p = sum(st.session_state.params["E"].values())
+    # SUBTAB B: Detenciones Endógenas P
+    with tab_paradas_endo:
         st.markdown(
-            f"""
-            <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 14px 18px; border-radius: 4px; font-size: 13px; color: #334155; margin-top: 24px;">
-              <div style="font-weight: 700; color: #0f172a; margin-bottom: 8px;">Resumen de Detenciones Exógenas</div>
-              Paradas totales programadas: <strong>{total_paradas}</strong> semanas<br>
-              Horas totales de detención: <strong>{total_horas_p:,.1f} horas</strong><br>
-              Semanas operacionales continuas: <strong>{H - total_paradas}</strong> semanas<br>
-              Tasa teórica de disponibilidad: <strong>{((H*168 - total_horas_p)/(H*168))*100:.2f}%</strong>
+            """
+            <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px 16px; border-radius: 4px; font-size: 13px; color: #334155; margin-bottom: 16px;">
+              <strong>Detenciones por causa endógena (Variables y_t y z_it, Formulación v7):</strong><br>
+              Ocurren en semanas del conjunto P = T \\ E cuando el molino SAG se detiene <em>exclusivamente</em> para cambiar revestimientos.
+              La duración de la detención no es externa, sino que se calcula según la fórmula oficial:
+              <strong>Duración = τ_c + ∑ τ_i</strong> (Tiempo base común τ_c más la suma de tiempos marginales τ_i de las secciones reemplazadas).
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+        c_en1, c_en2 = st.columns([3, 2])
+        with c_en1:
+            st.markdown("<div style='font-weight: 600; font-size: 13px; margin-bottom: 6px;'>Programar Nueva Detención Endógena:</div>", unsafe_allow_html=True)
+            semana_endo = st.number_input("Semana de la detención endógena (1 a 156):", min_value=1, max_value=H, value=25, step=1, key="input_sem_endo")
+            
+            # Selector de secciones a intervenir
+            secciones_endo = st.multiselect(
+                "Selecciona las secciones a reemplazar en esta detención:",
+                options=SECCIONES,
+                default=[1, 2, 3],
+                format_func=lambda s: f"Sección {s} (τ_{s}={st.session_state.params['secciones'][s]['tau_i']:.0f}h, ${st.session_state.params['secciones'][s]['CS_i']:,.0f})",
+                key="input_secc_endo"
+            )
+
+            # Cálculo dinámico de duración y costos
+            tau_c_val = float(st.session_state.params["global"].get("tau_c", 12.0))
+            tau_secc_val = sum(float(st.session_state.params["secciones"][s]["tau_i"]) for s in secciones_endo)
+            duracion_calculada = tau_c_val + tau_secc_val
+            costo_rev_estimado = sum(float(st.session_state.params["secciones"][s]["CS_i"]) for s in secciones_endo)
+            c_d_val = float(st.session_state.params["global"].get("C_D", 600.0))
+            costo_indisp_estimado = c_d_val * duracion_calculada
+
+            c_prev1, c_prev2, c_prev3 = st.columns(3)
+            c_prev1.metric("Duración calculada", f"{duracion_calculada:.1f} h", f"τ_c({tau_c_val:.0f}h) + ∑τ_i({tau_secc_val:.0f}h)")
+            c_prev2.metric("Inversión revestimientos", f"${costo_rev_estimado:,.0f}")
+            c_prev3.metric("Costo indisponibilidad", f"${costo_indisp_estimado:,.0f}")
+
+            if st.button("Guardar Detención Endógena", width="stretch"):
+                if not secciones_endo:
+                    st.warning("Debes seleccionar al menos una sección para programar una detención endógena.")
+                else:
+                    if "P_endogenas" not in st.session_state.params:
+                        st.session_state.params["P_endogenas"] = {}
+                    st.session_state.params["P_endogenas"][int(semana_endo)] = sorted(secciones_endo)
+                    st.success(f"Detención endógena guardada en Semana {semana_endo} con duración de {duracion_calculada:.1f} horas.")
+                    st.rerun()
+
+        with c_en2:
+            st.markdown("<div style='font-weight: 600; font-size: 13px; margin-bottom: 6px;'>Detenciones Endógenas Activas:</div>", unsafe_allow_html=True)
+            p_end_dict = st.session_state.params.get("P_endogenas", {})
+            if p_end_dict:
+                filas_p_end = []
+                for s_e, seccs in sorted(p_end_dict.items()):
+                    dur_e = tau_c_val + sum(float(st.session_state.params["secciones"][s]["tau_i"]) for s in seccs)
+                    filas_p_end.append({
+                        "Semana": s_e,
+                        "Duración": f"{dur_e:.1f} h",
+                        "Secciones": ", ".join(f"S{s}" for s in seccs),
+                        "Inversión Revestimientos": f"${sum(float(st.session_state.params['secciones'][s]['CS_i']) for s in seccs):,.0f}"
+                    })
+                st.dataframe(pd.DataFrame(filas_p_end), width="stretch", hide_index=True)
+                
+                c_del1, c_del2 = st.columns([2, 1])
+                sem_a_eliminar = c_del1.selectbox("Seleccionar semana a eliminar:", sorted(p_end_dict.keys()), key="select_del_endo")
+                if c_del2.button("Eliminar", width="stretch", key="btn_del_endo"):
+                    del st.session_state.params["P_endogenas"][sem_a_eliminar]
+                    st.rerun()
+                if st.button("Limpiar todas las detenciones endógenas", width="stretch"):
+                    st.session_state.params["P_endogenas"] = {}
+                    st.rerun()
+            else:
+                st.info("No hay detenciones endógenas configuradas actualmente. Usa el formulario a la izquierda para definir una.")
 
     st.markdown("<div style='margin-top: 28px; margin-bottom: 24px; border-top: 1px solid #e2e8f0;'></div>", unsafe_allow_html=True)
 
@@ -1110,7 +1213,7 @@ with tab_global:
     g = st.session_state.params["global"]
     c1, c2, c3, c4 = st.columns(4)
     g["rho"] = c1.number_input("ρ — Tasa de tratamiento nominal (t/sem)", value=float(g["rho"]), min_value=0.0, step=1000.0)
-    g["tau_c"] = c2.number_input("τ_c — Tiempo común de detención (h)", value=float(g["tau_c"]), min_value=0.0, step=0.5)
+    g["tau_c"] = c2.number_input("τ_c — Tiempo común de detención endógena (h)", value=float(g["tau_c"]), min_value=0.0, step=0.5)
     g["C_D"] = c3.number_input("C^D — Costo horario de indisponibilidad ($/h)", value=float(g["C_D"]), min_value=0.0, step=10.0)
     g["CF"] = c4.number_input("CF — Costo por falla del molino ($)", value=float(g["CF"]), min_value=0.0, step=1000.0)
 
