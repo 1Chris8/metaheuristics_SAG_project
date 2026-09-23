@@ -1,0 +1,26 @@
+# Entorno virtual
+.venv/
+env/
+venv/
+ENV/
+
+# Bytecode y cache de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Archivos de sistema operativo
+desktop.ini
+Thumbs.db
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Streamlit logs y credenciales locales
+.streamlit/secrets.toml
